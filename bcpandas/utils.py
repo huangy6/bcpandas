@@ -109,7 +109,8 @@ def bcp(
         ]
 
     # execute
-    bcp_command_log = [c if c != creds.password else "[REDACTED]" for c in bcp_command]
+    match_redact = creds.password if hasattr(creds, 'password') else None
+    bcp_command_log = [c if c != match_redact else "[REDACTED]" for c in bcp_command]
     logger.info(f"Executing BCP command now... \nBCP command is: {bcp_command_log}")
     ret_code = run_cmd(bcp_command)
     if ret_code:
@@ -195,7 +196,7 @@ def quote_this(this: str, skip: bool = False) -> str:
     OS-safe way to quote a string.
 
     Returns the string with quotes around it.
-    On Windows ~~it's double quotes~~ we skip quoting, 
+    On Windows ~~it's double quotes~~ we skip quoting,
     on Linux it's single quotes.
     """
     if isinstance(this, str):
@@ -209,9 +210,9 @@ def quote_this(this: str, skip: bool = False) -> str:
 
 def run_cmd(cmd: List[str]) -> int:
     """
-    Runs the given command. 
-    
-    Prints STDOUT in real time,  prints STDERR when command is complete, 
+    Runs the given command.
+
+    Prints STDOUT in real time,  prints STDERR when command is complete,
     and logs both STDOUT and STDERR.
 
     Paramters

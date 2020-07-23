@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 class SqlCreds:
     """
-    Credential object for all SQL operations. Will automatically also create a SQLAlchemy 
+    Credential object for all SQL operations. Will automatically also create a SQLAlchemy
     engine that uses `pyodbc` as the DBAPI, and store it in the `self.engine` attribute.
 
     If `username` and `password` are not provided, `with_krb_auth` will be `True`.
@@ -45,11 +45,11 @@ class SqlCreds:
     username : str, optional
     password : str, optional
     driver_version : int, default 17
-        The version of the Microsoft ODBC Driver for SQL Server to use 
+        The version of the Microsoft ODBC Driver for SQL Server to use
     odbc_kwargs : dict of {str, str or int}, optional
-        additional keyword arguments, to pass into ODBC connection string, 
+        additional keyword arguments, to pass into ODBC connection string,
         such as Encrypted='yes'
-    
+
     Returns
     -------
     `bcpandas.SqlCreds`
@@ -59,41 +59,31 @@ class SqlCreds:
         self,
         server: str,
         database: str,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
+        username: str = None,
+        password: str = None,
         driver_version: int = 17,
-        port: int = 1433,
         odbc_kwargs: Optional[Dict[str, Union[str, int]]] = None,
     ):
+        if not server or not database:
+            raise BCPandasValueError(
+                f"Server and database can't be None, you passed {server}, {database}"
+            )
         self.server = server
         self.database = database
-        self.port = port
-
-        self.driver = f"{{ODBC Driver {driver_version} for SQL Server}}"
-
-        # Append a comma for use in connection strings (optionally blank)
-        if port:
-            port_str = f",{self.port}"
-        else:
-            port_str = ""
-
-        db_url = (
-            f"Driver={self.driver};Server=tcp:{self.server}{port_str};Database={self.database};"
-        )
         if username and password:
             self.username = username
             self.password = password
             self.with_krb_auth = False
-            db_url += f"UID={username};PWD={password}"
         else:
-            self.username = ""
-            self.password = ""
             self.with_krb_auth = True
-            db_url += "Trusted_Connection=yes;"
-
         logger.info(f"Created creds:\t{self}")
 
         # construct the engine for sqlalchemy
+        driver = f"{{ODBC Driver {driver_version} for SQL Server}}"
+        db_url = (
+            f"Driver={driver};Server=tcp:{self.server},1433;Database={self.database};" +
+            ("Trusted_Connection=yes;" if self.with_krb_auth else f"UID={self.username};PWD={self.password}")
+        )
         if odbc_kwargs:
             db_url += ";".join(f"{k}={v}" for k, v in odbc_kwargs.items())
         conn_string = f"mssql+pyodbc:///?odbc_connect={quote_plus(db_url)}"
@@ -104,10 +94,10 @@ class SqlCreds:
     @classmethod
     def from_engine(cls, engine: sa.engine.base.Engine) -> "SqlCreds":
         """
-        Alternate constructor, from a `sqlalchemy.engine.base.Engine` that uses `pyodbc` as the DBAPI 
+        Alternate constructor, from a `sqlalchemy.engine.base.Engine` that uses `pyodbc` as the DBAPI
         (which is the SQLAlchemy default for MS SQL) and using an exact PyODBC connection string (not DSN or hostname).
         See https://docs.sqlalchemy.org/en/13/dialects/mssql.html#connecting-to-pyodbc for more.
-        
+
         Parameters
         ----------
         engine : `sqlalchemy.engine.base.Engine`
@@ -121,19 +111,14 @@ class SqlCreds:
             # get the odbc url part from the engine, split by ';' delimiter
             conn_url = engine.url.query["odbc_connect"].split(";")
             # convert into dict
-            conn_dict = {x.split("=")[0]: x.split("=")[1] for x in conn_url if "=" in x}
-
-            if "," in conn_dict["Server"]:
-                conn_dict["port"] = int(conn_dict["Server"].split(",")[1])
+            conn_dict = {x.split("=")[0].lower(): x.split("=")[1] for x in conn_url if "=" in x}
 
             sql_creds = cls(
-                server=conn_dict["Server"].replace("tcp:", "").split(",")[0],
-                database=conn_dict["Database"],
-                username=conn_dict.get("UID", None),
-                password=conn_dict.get("PWD", None),
-                port=conn_dict.get("port", None),
+                server=conn_dict["server"].replace("tcp:", "").replace(",1433", ""),
+                database=conn_dict["database"],
+                username=conn_dict["uid"] if 'uid' in conn_dict else None,
+                password=conn_dict["pwd"] if 'pwd' in conn_dict else None,
             )
-
             # add Engine object as attribute
             sql_creds.engine = engine
             return sql_creds
@@ -156,9 +141,9 @@ class SqlCreds:
 
 def _sql_item_exists(sql_type: str, schema: str, table_name: str, creds: SqlCreds) -> bool:
     _qry = """
-        SELECT * 
-        FROM INFORMATION_SCHEMA.{_typ}S 
-        WHERE TABLE_SCHEMA = '{_schema}' 
+        SELECT *
+        FROM INFORMATION_SCHEMA.{_typ}S
+        WHERE TABLE_SCHEMA = '{_schema}'
         AND TABLE_NAME = '{_tbl}'
         """.format(
         _typ=sql_type.upper(), _schema=schema, _tbl=table_name
@@ -223,7 +208,7 @@ def to_sql(
         * fail: Raise a BCPandasValueError.
         * replace: Drop the table before inserting new values.
         * append: Insert new values to the existing table. Matches the dataframe columns to the database columns by name.
-            If the database table exists then the dataframe cannot have new columns that aren't in the table, 
+            If the database table exists then the dataframe cannot have new columns that aren't in the table,
             but conversely table columns can be missing from the dataframe.
     batch_size : int, optional
         Rows will be written in batches of this size at a time. By default, BCP sets this to 1000.
@@ -251,7 +236,7 @@ def to_sql(
     delim = get_delimiter(df)
     quotechar = get_quotechar(df)
 
-    if batch_size is not None:
+    if batch_size:
         if batch_size == 0:
             raise BCPandasValueError("Param batch_size can't be 0")
         if batch_size > df.shape[0]:
@@ -287,8 +272,8 @@ def to_sql(
         cols_dict = dict(
             pd.read_sql_query(
                 """
-                SELECT COLUMN_NAME, ORDINAL_POSITION 
-                FROM INFORMATION_SCHEMA.COLUMNS 
+                SELECT COLUMN_NAME, ORDINAL_POSITION
+                FROM INFORMATION_SCHEMA.COLUMNS
                 WHERE TABLE_SCHEMA = '{_schema}'
                 AND TABLE_NAME = '{_tbl}'
             """.format(
